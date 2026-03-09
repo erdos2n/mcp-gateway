@@ -11,6 +11,7 @@
 import { readFileSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
+import { request as httpRequest } from "http";
 import express from "express";
 import { createProxyMiddleware } from "http-proxy-middleware";
 import yaml from "js-yaml";
@@ -104,25 +105,26 @@ for (const service of config.services) {
 // ── OAuth authorize ──────────────────────────────────────────
 // Routes to the right service based on client_id query param
 
-app.get("/authorize", async (req, res) => {
+app.get("/authorize", (req, res) => {
   const client_id = req.query.client_id as string;
   const service = findServiceByClientId(client_id);
   if (!service) {
     res.status(401).json({ error: "invalid_client", error_description: `Unknown client_id: ${client_id}` });
     return;
   }
-  try {
-    const params = new URLSearchParams(req.query as Record<string, string>);
-    const response = await fetch(`http://localhost:${service.port}/authorize?${params}`, {
-      redirect: "manual",
-    });
-    // Forward the redirect (302 → claude.ai callback)
-    response.headers.forEach((value, key) => res.setHeader(key, value));
-    res.status(response.status).end();
-  } catch (err) {
+  const params = new URLSearchParams(req.query as Record<string, string>);
+  const proxyReq = httpRequest(
+    { hostname: "localhost", port: service.port, path: `/authorize?${params}`, method: "GET" },
+    (proxyRes) => {
+      res.writeHead(proxyRes.statusCode!, proxyRes.headers as any);
+      proxyRes.pipe(res);
+    }
+  );
+  proxyReq.on("error", (err) => {
     console.error("Authorize proxy error:", err);
-    res.status(502).json({ error: "Bad Gateway" });
-  }
+    if (!res.headersSent) res.status(502).json({ error: "Bad Gateway" });
+  });
+  proxyReq.end();
 });
 
 // ── OAuth token ──────────────────────────────────────────────
