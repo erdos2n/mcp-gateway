@@ -1,92 +1,121 @@
 /**
  * MCP Gateway
  *
- * Single entry point for all MCP servers behind Tailscale Funnel.
- * Handles OAuth discovery and proxies to individual MCP services.
+ * Reads config.yaml at startup and dynamically:
+ *   - Generates OAuth discovery endpoints for each service
+ *   - Proxies requests to the appropriate MCP service
  *
- * Services:
- *   Meticulous MCP  →  http://localhost:3001  (root path)
- *   GitHub MCP      →  http://localhost:47891 (/github path)
- *
- * Environment variables:
- *   PORT            - HTTP port to listen on (default: 3000)
- *   PUBLIC_HOST     - Public hostname e.g. mcp-gateway.tail401b7f.ts.net
+ * To add a new MCP server: add an entry to config.yaml and restart.
  */
 
+import { readFileSync } from "fs";
+import { join, dirname } from "path";
+import { fileURLToPath } from "url";
 import express from "express";
 import { createProxyMiddleware } from "http-proxy-middleware";
+import yaml from "js-yaml";
 
-const PORT = parseInt(process.env.PORT ?? "3000", 10);
-const PUBLIC_HOST = process.env.PUBLIC_HOST ?? "";
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
+// ============================================================
+// CONFIG
+// ============================================================
+
+interface ServiceConfig {
+  name: string;
+  path: string;
+  port: number;
+  oauth_client_id: string;
+}
+
+interface Config {
+  gateway: {
+    port: number;
+    public_host: string;
+  };
+  services: ServiceConfig[];
+}
+
+const config = yaml.load(
+  readFileSync(join(__dirname, "../config.yaml"), "utf8")
+) as Config;
+
+const PORT = config.gateway.port;
+const PUBLIC_HOST = process.env.PUBLIC_HOST ?? config.gateway.public_host;
+
+// ============================================================
+// APP
+// ============================================================
 
 const app = express();
 
-// ============================================================
-// OAUTH DISCOVERY DOCUMENTS
-// Generated here so each MCP service stays unaware of routing
-// ============================================================
-
-app.get("/.well-known/oauth-authorization-server", (req, res) => {
-  const base = PUBLIC_HOST ? `https://${PUBLIC_HOST}` : `https://${req.get("host")}`;
+// Health check — lists all registered services
+app.get("/health", (_req, res) => {
   res.json({
-    issuer: base,
-    authorization_endpoint: `${base}/authorize`,
-    token_endpoint: `${base}/oauth/token`,
-    grant_types_supported: ["authorization_code"],
-    response_types_supported: ["code"],
-    code_challenge_methods_supported: ["S256"],
-    token_endpoint_auth_methods_supported: ["client_secret_post", "none"],
+    status: "ok",
+    services: config.services.map((s) => ({
+      name: s.name,
+      path: s.path,
+      port: s.port,
+    })),
   });
 });
 
-app.get("/.well-known/oauth-authorization-server/github", (req, res) => {
-  const base = PUBLIC_HOST ? `https://${PUBLIC_HOST}` : `https://${req.get("host")}`;
-  res.json({
-    issuer: `${base}/github`,
-    authorization_endpoint: `${base}/github/authorize`,
-    token_endpoint: `${base}/github/oauth/token`,
-    grant_types_supported: ["authorization_code"],
-    response_types_supported: ["code"],
-    code_challenge_methods_supported: ["S256"],
-    token_endpoint_auth_methods_supported: ["client_secret_post", "none"],
+// ── OAuth discovery ──────────────────────────────────────────
+// Per RFC 8414, for issuer https://host/path the discovery URL is:
+// https://host/.well-known/oauth-authorization-server/path
+// Root services use: https://host/.well-known/oauth-authorization-server
+
+for (const service of config.services) {
+  const discoveryPath =
+    service.path === "/"
+      ? "/.well-known/oauth-authorization-server"
+      : `/.well-known/oauth-authorization-server${service.path}`;
+
+  app.get(discoveryPath, (req, res) => {
+    const base = `https://${PUBLIC_HOST || req.get("host")}`;
+    const serviceBase = service.path === "/" ? base : `${base}${service.path}`;
+    res.json({
+      issuer: serviceBase,
+      authorization_endpoint: `${serviceBase}/authorize`,
+      token_endpoint: `${serviceBase}/oauth/token`,
+      grant_types_supported: ["authorization_code"],
+      response_types_supported: ["code"],
+      code_challenge_methods_supported: ["S256"],
+      token_endpoint_auth_methods_supported: ["client_secret_post", "none"],
+    });
   });
-});
+}
 
-// ============================================================
-// HEALTH CHECK
-// ============================================================
+// ── Proxy routes ─────────────────────────────────────────────
+// Sort longest path first so more specific routes match before root
 
-app.get("/health", (_req, res) => res.json({ status: "ok" }));
+const sorted = [...config.services].sort((a, b) => b.path.length - a.path.length);
 
-// ============================================================
-// PROXY — /github/* → GitHub MCP (port 47891)
-// Strip the /github prefix before forwarding
-// ============================================================
+for (const service of sorted) {
+  const proxyOptions =
+    service.path === "/"
+      ? {
+          target: `http://localhost:${service.port}`,
+          changeOrigin: true,
+        }
+      : {
+          target: `http://localhost:${service.port}`,
+          changeOrigin: true,
+          pathRewrite: { [`^${service.path}`]: "" },
+        };
 
-app.use(
-  "/github",
-  createProxyMiddleware({
-    target: "http://localhost:47891",
-    changeOrigin: true,
-    pathRewrite: { "^/github": "" },
-  })
-);
+  app.use(service.path, createProxyMiddleware(proxyOptions));
+}
 
-// ============================================================
-// PROXY — /* → Meticulous MCP (port 3001)
-// ============================================================
-
-app.use(
-  "/",
-  createProxyMiddleware({
-    target: "http://localhost:3001",
-    changeOrigin: true,
-  })
-);
+// ── Start ────────────────────────────────────────────────────
 
 app.listen(PORT, () => {
   console.log(`MCP Gateway running on port ${PORT}`);
-  console.log(`Public host: ${PUBLIC_HOST || "(using request host)"}`);
+  console.log(`Public host: ${PUBLIC_HOST}`);
+  for (const s of config.services) {
+    console.log(`  ${s.name}: ${s.path} → localhost:${s.port}`);
+  }
 });
 
 process.on("unhandledRejection", (reason) => console.error("Unhandled rejection:", reason));

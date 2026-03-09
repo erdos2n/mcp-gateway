@@ -1,0 +1,26 @@
+gateway:
+  port: 3000
+  public_host: mcp-gateway.tail401b7f.ts.net
+  base_dir: /home/admin/github
+  user: admin
+  node_path: /home/admin/.nvm/versions/node/v20.20.1/bin/node
+  systemd_name: mcp-gateway
+
+services:
+  - name: meticulous
+    path: /
+    port: 3001
+    oauth_client_id: meticulous-mcp
+    repo: https://github.com/erdos2n/meticulous-mcp-server
+    dir: meticulous-mcp-server
+    start: dist/http.js
+    systemd_name: meticulous-mcp
+
+  - name: github
+    path: /github
+    port: 47891
+    oauth_client_id: github-mcp
+    repo: https://github.com/erdos2n/github-mcp-http
+    dir: github-mcp-http
+    start: dist/index.js
+    systemd_name: github-mcp
