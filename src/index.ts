@@ -93,12 +93,15 @@ app.get("/.well-known/oauth-authorization-server", (req, res) => {
 });
 
 // Per-service discovery (RFC 8414 path format)
+// Register both /path and /path/mcp variants so claude.ai finds it regardless of URL used
 for (const service of config.services) {
   if (service.path !== "/") {
-    app.get(`/.well-known/oauth-authorization-server${service.path}`, (req, res) => {
-      const base = getBase(req);
-      res.json(discoveryResponse(base, `${base}${service.path}`));
-    });
+    for (const suffix of ["", "/mcp"]) {
+      app.get(`/.well-known/oauth-authorization-server${service.path}${suffix}`, (req, res) => {
+        const base = getBase(req);
+        res.json(discoveryResponse(base, `${base}${service.path}`));
+      });
+    }
   }
 }
 
