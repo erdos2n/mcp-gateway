@@ -186,6 +186,17 @@ app.listen(PORT, () => {
   for (const s of config.services) {
     console.log(`  ${s.name}: ${s.path} → localhost:${s.port}`);
   }
+
+  // ── Keepalive ─────────────────────────────────────────────
+  // Pings /health every 3 minutes to prevent claude.ai from dropping
+  // the connector session due to idle timeout (~5 min observed threshold).
+  const KEEPALIVE_INTERVAL_MS = 3 * 60 * 1000;
+  setInterval(() => {
+    fetch(`http://localhost:${PORT}/health`)
+      .then(() => console.log(`[keepalive] ping ok`))
+      .catch((err) => console.warn(`[keepalive] ping failed:`, err.message));
+  }, KEEPALIVE_INTERVAL_MS);
+  console.log(`Keepalive: pinging /health every 3 minutes`);
 });
 
 process.on("unhandledRejection", (reason) => console.error("Unhandled rejection:", reason));
