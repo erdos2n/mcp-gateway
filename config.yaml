@@ -5,6 +5,7 @@ gateway:
   user: admin
   node_path: /home/admin/.nvm/versions/node/v20.20.1/bin/node
   systemd_name: mcp-gateway
+  token_lifetime: 2592000  # 30 days in seconds
 
 services:
   - name: meticulous

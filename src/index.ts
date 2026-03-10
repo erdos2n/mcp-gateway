@@ -33,6 +33,7 @@ interface Config {
   gateway: {
     port: number;
     public_host: string;
+    token_lifetime?: number;
   };
   services: ServiceConfig[];
 }
@@ -151,7 +152,10 @@ app.post("/oauth/token", async (req, res) => {
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body,
       });
-      const data = await response.json();
+      const data = await response.json() as Record<string, unknown>;
+      if (data.access_token && config.gateway.token_lifetime) {
+        data.expires_in = config.gateway.token_lifetime;
+      }
       res.status(response.status).json(data);
     } catch (err) {
       console.error("Token proxy error:", err);
