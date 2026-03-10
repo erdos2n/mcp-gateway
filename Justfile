@@ -2,7 +2,7 @@
 # Install just: cargo install just  OR  brew install just
 
 # Pull latest, rebuild, and restart the gateway
-update:
+pull-restart:
     git pull
     npm install
     npm run build
